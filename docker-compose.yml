@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  metrics-exporter:
+    image: quanquanah/prometheus-metrics-exporter:dev
+    container_name: prometheus-metrics-exporter
+    ports:
+      - "6071:9368"
+    command: [
+      "-url", "https://rpc.dev.deriw.com",
+      "-evm",
+      "-processes", "nitro"
+    ]
+    pid: host
+    restart: unless-stopped
