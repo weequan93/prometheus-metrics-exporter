@@ -75,6 +75,7 @@ func main() {
 		collectors = append(collectors,
 			collector.NewEthBlockNumber(rpc),
 			collector.NewEthBlockTimestamp(rpc),
+			collector.NewEthPricingSurplus(rpc),
 		)
 	}
 
