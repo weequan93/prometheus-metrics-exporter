@@ -27,6 +27,11 @@ ethereum_exporter -evm -url http://localhost:8545
 # Full Ethereum node (all metrics: peers, gas price, transactions, etc.)
 ethereum_exporter -eth -url http://localhost:8545
 
+# Arbitrum Nitro node with parent-chain lag metrics
+ethereum_exporter -arbitrum \
+  -url http://localhost:8547 \
+  -arbitrum-parent-url http://l1-node:8545
+
 # Combine with process monitoring
 ethereum_exporter -eth -processes "geth,parity" -url http://localhost:8545
 
@@ -37,8 +42,36 @@ ethereum_exporter -evm -processes "polygon,bsc" -url http://localhost:8545
 **Flags:**
 - `-evm`: Enable basic EVM node collectors (block number, timestamp)
 - `-eth`: Enable full Ethereum node collectors (all available metrics)
-- **Note**: `-eth` and `-evm` are mutually exclusive. Use `-eth` for full Ethereum nodes, `-evm` for EVM-compatible chains.
-- Both flags can be combined with `-processes` for process monitoring
+- `-arbitrum`: Enable Arbitrum Nitro collectors
+- `-arbitrum-parent-url`: Optional parent-chain JSON-RPC URL used to calculate L1 block lag and batch posting freshness
+- **Note**: `-eth`, `-evm`, and `-arbitrum` are mutually exclusive. Use `-eth` for full Ethereum nodes, `-evm` for EVM-compatible chains, and `-arbitrum` for Nitro nodes.
+- Node type flags can be combined with `-processes` and `-nginx` for process and access-log monitoring
+
+### Nginx Access Log Monitoring
+
+The exporter can tail nginx access logs that use this log format:
+
+```nginx
+log_format upstream_time2 '$remote_addr - $remote_user [$time_local] '
+                          '"$request" $status $body_bytes_sent '
+                          'upstream="$upstream_addr" '
+                          '"$http_referer" "$http_user_agent" '
+                          'rt="$request_time" uct="$upstream_connect_time" '
+                          'uht="$upstream_header_time" urt="$upstream_response_time"';
+```
+
+Run it with:
+
+```bash
+ethereum_exporter \
+  -nginx \
+  -nginx-log-files "/var/log/nginx/access.log" \
+  -nginx-state-file "/state/nginx-access-log.json"
+```
+
+`-nginx-log-files` accepts comma-separated files or glob patterns. `-nginx-state-file` is optional, but recommended in Docker so the exporter can resume from the previous byte offset after restarts. The collector handles common log rotation cases by resetting the offset when the active file changes or is truncated.
+
+The nginx metrics label by `origin` and `upstream`, so keep the monitored log scope narrow enough to avoid excessive Prometheus label cardinality.
 
 ### Process Monitoring
 
@@ -60,23 +93,28 @@ docker run -d -p 9368:9368 --name ethereum-exporter \
 
 ### Docker Compose Example
 
-A complete `docker-compose.yml` example with process monitoring and Prometheus:
+A complete `docker-compose.yml` example for an Arbitrum Nitro node, nginx logs, process monitoring, and Prometheus:
 
 ```yaml
-version: '3.8'
-
 services:
-  ethereum-exporter:
-    image: 31z4/ethereum-prometheus-exporter
-    container_name: ethereum-exporter
+  metrics-exporter:
+    image: quanquanah/prometheus-metrics-exporter:dev
+    container_name: prometheus-metrics-exporter
+    user: "0:0"
+    pid: host
     ports:
       - "6071:9368"
     volumes:
-      - /proc:/proc:ro
+      - /var/log/nginx:/var/log/nginx:ro
+      - exporter-state:/state
     command: [
-      "-url", "http://11.201.0.111:8449",
-      "-eth",
-      "-processes", "geth,parity,ethereum,besu,nethermind"
+      "-url", "http://arbitrum-node:8547",
+      "-arbitrum",
+      "-arbitrum-parent-url", "http://l1-node:8545",
+      "-processes", "nitro",
+      "-nginx",
+      "-nginx-log-files", "/var/log/nginx/access.log",
+      "-nginx-state-file", "/state/nginx-access-log.json"
     ]
     restart: unless-stopped
 
@@ -88,9 +126,14 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     restart: unless-stopped
+
+volumes:
+  exporter-state:
 ```
 
 Start with: `docker-compose up -d`
+
+The same configuration is available as [`examples/docker-compose.arbitrum-nginx.yml`](examples/docker-compose.arbitrum-nginx.yml). The container runs as root in that example because host nginx logs and `/proc` entries are commonly not readable by the image's default `nobody` user.
 
 ### Building Docker Image
 
@@ -150,6 +193,24 @@ Here is an example [`scrape_config`](https://prometheus.io/docs/prometheus/lates
 | parity_net_active_peers | Number of active peers. *Available only for OpenEthereum*. | `-eth` |
 | parity_net_connected_peers | Number of peers currently connected to this client. *Available only for OpenEthereum*. | `-eth` |
 | process_start_time_seconds | Process start time in seconds since epoch. Labels: `process_name`, `pid`. | `-processes` |
+| arbitrum_l2_block_number | Number of the most recent Arbitrum L2 block. | `-arbitrum` |
+| arbitrum_l2_block_timestamp | Timestamp of the most recent Arbitrum L2 block. | `-arbitrum` |
+| arbitrum_l1_block_number | L1 block number referenced by the latest Arbitrum L2 block. | `-arbitrum` |
+| arbitrum_syncing | Whether the Arbitrum node reports it is syncing. | `-arbitrum` |
+| arbitrum_sync_starting_block | Arbitrum sync starting block. | `-arbitrum` |
+| arbitrum_sync_current_block | Arbitrum sync current block. | `-arbitrum` |
+| arbitrum_sync_highest_block | Arbitrum sync highest block. | `-arbitrum` |
+| arbitrum_parent_chain_block_number | Latest parent-chain block number. | `-arbitrum-parent-url` |
+| arbitrum_l1_block_lag | Parent-chain head minus the latest L2 block's referenced L1 block. | `-arbitrum-parent-url` |
+| arbitrum_batch_poster_l1_block_lag | Same lag exposed as a batch posting freshness signal. | `-arbitrum-parent-url` |
+| nginx_access_requests_total | Parsed nginx requests. Labels: `file`, `status`, `upstream`, `origin`. | `-nginx` |
+| nginx_access_upstream_changes_total | Consecutive request upstream changes. Labels: `file`, `previous_upstream`, `upstream`. | `-nginx` |
+| nginx_access_request_duration_seconds | Parsed nginx timings by `phase`, exported as Prometheus summary `_sum` and `_count` series. | `-nginx` |
+| nginx_access_log_parse_errors_total | Nginx log lines or timing values that could not be parsed. | `-nginx` |
+| nginx_access_log_read_errors_total | Nginx log read errors. | `-nginx` |
+| nginx_access_log_state_errors_total | Nginx state file read or write errors. | `-nginx` |
+| nginx_access_log_read_offset_bytes | Current byte offset read in each nginx log file. | `-nginx` |
+| nginx_access_log_last_read_timestamp_seconds | Last successful nginx log read timestamp. | `-nginx` |
 
 ## Development
 

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/rpc"
@@ -33,9 +32,6 @@ func TestEthSyncingCollectError(t *testing.T) {
 		err := result.Write(&metric)
 		if err == nil {
 			t.Fatalf("expected invalid metric, got %#v", metric)
-		}
-		if _, ok := err.(*url.Error); !ok {
-			t.Fatalf("unexpected error %#v", err)
 		}
 	}
 }

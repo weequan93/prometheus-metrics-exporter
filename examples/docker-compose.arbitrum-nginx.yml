@@ -1,0 +1,40 @@
+services:
+  metrics-exporter:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: prometheus-metrics-exporter:local
+    container_name: prometheus-metrics-exporter
+    user: "0:0"
+    pid: host
+    ports:
+      - "6071:9368"
+    volumes:
+      - /var/log/nginx:/var/log/nginx:ro
+      - exporter-state:/state
+    command:
+      - "-url"
+      - "http://arbitrum-node:8547"
+      - "-arbitrum"
+      - "-arbitrum-parent-url"
+      - "http://l1-node:8545"
+      - "-processes"
+      - "nitro"
+      - "-nginx"
+      - "-nginx-log-files"
+      - "/var/log/nginx/access.log"
+      - "-nginx-state-file"
+      - "/state/nginx-access-log.json"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    restart: unless-stopped
+
+volumes:
+  exporter-state:
